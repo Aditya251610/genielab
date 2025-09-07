@@ -42,7 +42,7 @@ export async function processPrompt(prompt: string): Promise<ProcessPromptRespon
     // Generate AI content using systemInstruction + user content
     const result = await genAI.models.generateContent({
       model: 'gemini-1.5-pro-latest',
-      systemInstruction: { role: 'system', parts: [{ text: SYSTEM_INSTRUCTION }] },
+      systemInstructions: { role: 'system', parts: [{ text: SYSTEM_INSTRUCTION }] },
       contents: [
         { role: 'user', parts: [{ text: prompt }] }
       ]
