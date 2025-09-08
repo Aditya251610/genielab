@@ -33,34 +33,48 @@ Your output must be a JSON object with a 'status' field.
 Agent types should be concise, like "FullstackAppAgent", "CI_CDAgent", or "DatabaseManagerAgent".
 `;
 
+const chat = genAI.chats.create({
+    model: 'gemini-2.5-flash',
+    history: [
+      {
+        role: 'user',
+        parts: [{ text: SYSTEM_INSTRUCTION }]
+      },
+    ],
+  })
+
+  function extractJSON(text: string) {
+  // Match ```json ... ``` and capture the inner content
+  const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+  // fallback: maybe AI returned raw JSON without backticks
+  return text.trim();
+}
+
 export async function processPrompt(prompt: string): Promise<ProcessPromptResponse> {
   if (!prompt?.trim()) {
     return { status: 'ready', error: 'Prompt is required' };
   }
 
-  try {
-    // Generate AI content using systemInstruction + user content
-    const result = await genAI.models.generateContent({
-      model: 'gemini-1.5-pro-latest',
-      systemInstructions: { role: 'system', parts: [{ text: SYSTEM_INSTRUCTION }] },
-      contents: [
-        { role: 'user', parts: [{ text: prompt }] }
-      ]
+  try{
+    const response = await chat.sendMessage({
+      message: prompt,
     });
 
-    // Access text as a property (not a method)
-    const responseText = result.text ?? '';
+    const responseText = response.text;
 
-    if (!responseText) {
-      return { status: 'ready', error: 'No response from AI' };
+    if(!responseText) {
+      return { status: 'ready', error: 'No response from AI.' }
     }
 
-    // Parse and return structured JSON
-    const parsed: ProcessPromptResponse = JSON.parse(responseText);
-    return parsed;
-
-  } catch (err) {
-    console.error('Failed to get AI response:', err);
-    return { status: 'ready', error: 'Failed to fetch a valid response from the AI model.' };
+    const jsonText = extractJSON(responseText)
+    const parsed: ProcessPromptResponse = JSON.parse(jsonText);
+    return parsed
+  } catch(err) {
+    console.error('Failed to get AI response: ', err);
+    return { status: 'ready', error: 'Failed to fetch a valid response from AI  model.' }
   }
+  
 }
