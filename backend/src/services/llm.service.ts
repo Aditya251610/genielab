@@ -1,80 +1,75 @@
-import { GoogleGenAI } from '@google/genai';
-import "dotenv/config";
+import { genAI, SYSTEM_INSTRUCTION } from './gemini.service';
+import { redisClient } from './redis.service';
+import { ProcessPromptResponse, ChatMessage, ChatPart } from '../types/chat';
 
-// Define the structured return type
-export interface ProcessPromptResponse {
-  status: 'need_more_info' | 'ready';
-  question?: string;
-  agentType?: string;
-  error?: string;
-}
-
-// Fail-fast if API key is missing
-if (!process.env['GEMINI_API_KEY']) {
-  throw new Error('GEMINI_API_KEY environment variable is not set');
-}
-
-// Initialize Gemini client once
-const genAI = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY
-});
-
-// System instruction for the AI
-const SYSTEM_INSTRUCTION = `
-You are an AI assistant that analyzes a user’s request to create another AI agent.
-Your primary task is to determine if you have enough information.
-- If details are missing, ask one clear, concise follow-up question.
-- If you have enough information, determine the specific type of AI agent to create.
-
-Your output must be a JSON object with a 'status' field.
-- If asking a question, set status to 'need_more_info' and provide the 'question'.
-- If ready, set status to 'ready' and provide the 'agentType'.
-
-Agent types should be concise, like "FullstackAppAgent", "CI_CDAgent", or "DatabaseManagerAgent".
-`;
-
-const chat = genAI.chats.create({
-    model: 'gemini-2.5-flash',
-    history: [
-      {
-        role: 'user',
-        parts: [{ text: SYSTEM_INSTRUCTION }]
-      },
-    ],
-  })
-
-  function extractJSON(text: string) {
-  // Match ```json ... ``` and capture the inner content
+// --- Helper to extract JSON ---
+function extractJSON(text: string) {
   const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (match && match[1]) {
-    return match[1].trim();
-  }
-  // fallback: maybe AI returned raw JSON without backticks
-  return text.trim();
+  return match?.[1]?.trim() || text.trim();
 }
 
-export async function processPrompt(prompt: string): Promise<ProcessPromptResponse> {
+export async function processPrompt(prompt: string, sessionId: string): Promise<ProcessPromptResponse> {
   if (!prompt?.trim()) {
     return { status: 'ready', error: 'Prompt is required' };
   }
 
-  try{
-    const response = await chat.sendMessage({
-      message: prompt,
-    });
+  const sessionKey = `chat:${sessionId}`;
 
-    const responseText = response.text;
+  try {
+    const data = await redisClient.get(sessionKey);
+    let chatHistory: ChatMessage[] = data ? JSON.parse(data) : [];
 
-    if(!responseText) {
-      return { status: 'ready', error: 'No response from AI.' }
+    if (chatHistory.length === 0) {
+      chatHistory.push({ role: 'user', parts: [{ text: SYSTEM_INSTRUCTION }] });
     }
 
-    const jsonText = extractJSON(responseText)
-    const parsed: ProcessPromptResponse = JSON.parse(jsonText);
-    return parsed
-  } catch(err) {
-    console.error('Failed to get AI response: ', err);
-    return { status: 'ready', error: 'Failed to fetch a valid response from AI  model.' }
+    chatHistory.push({ role: 'user', parts: [{ text: prompt }] });
+
+    const chat = genAI.chats.create({
+      model: 'gemini-2.5-flash',
+      history: chatHistory
+    });
+
+    const response = await chat.sendMessage({ message: prompt });
+    const responseText = response.text || '';
+
+    if (!responseText) {
+      return { status: 'ready', error: 'No response from AI.' };
+    }
+
+    const jsonText = extractJSON(responseText);
+    let parsed: ProcessPromptResponse;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      parsed = { status: 'ready', error: 'Invalid JSON from AI', raw: responseText };
+    }
+
+    chatHistory.push({ role: 'model', parts: [{ text: responseText }] });
+
+    await redisClient.set(sessionKey, JSON.stringify(chatHistory), { EX: 3600 });
+
+    if (parsed.status === 'ready') {
+      const allUserMessages = chatHistory
+        .filter(m => m.role === 'user')
+        .map(m => m.parts.map((p: ChatPart) => p.text).join(" "))
+        .join(" ")
+        .toLowerCase();
+
+      const missing = ['platform', 'tool', 'framework', 'language', 'functionality', 'feature', 'constraint']
+        .some(k => !allUserMessages.includes(k));
+
+      if (missing) {
+        return {
+          status: 'need_more_info',
+          question: 'Could you provide more details on the platform, tools, features, and constraints for the agent?'
+        };
+      }
+    }
+
+    return parsed;
+  } catch (err) {
+    console.error('Error in processPrompt:', err);
+    return { status: 'ready', error: 'Failed to process prompt' };
   }
-  
 }
