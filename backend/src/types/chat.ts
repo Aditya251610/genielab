@@ -6,6 +6,16 @@ export interface ProcessPromptResponse {
   raw?: string;
 }
 
-export type ChatPart = { text: string };
+export type ChatPart = {
+  text: string;
+};
+
 export type ChatRole = 'user' | 'model';
-export type ChatMessage = { role: ChatRole; parts: ChatPart[] };
+
+export type ChatMessage = {
+  role: ChatRole;
+  parts: ChatPart[];
+  timestamp: string;        // ISO string for ordering
+  sessionId?: string;       // link to session (for DB + sidebar)
+  metadata?: Record<string, any>; // optional extra info
+};

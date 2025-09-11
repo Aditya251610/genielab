@@ -1,14 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
-import 'dotenv/config'
-
-if (!process.env['GEMINI_API_KEY']) {
-  throw new Error('GEMINI_API_KEY environment variable is not set');
-}
-
-export const genAI = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY
-});
-
 export const SYSTEM_INSTRUCTION = `
 You are an AI assistant that analyzes a user’s request to create another AI agent.
 Your primary task is to determine if enough information has been provided.
@@ -33,3 +22,4 @@ Examples:
 2. User: I want an AI agent to manage PostgreSQL databases.
    Assistant: { "status": "need_more_info", "question": "Should the agent support read-only operations, writes, or full admin access?" }
 `;
+
