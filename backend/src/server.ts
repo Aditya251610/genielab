@@ -2,6 +2,19 @@ import app from "./index";
 import "dotenv/config";
 import { initRedis } from "./services/redis.service";
 import { pool } from "./services/mariadb.service";
+import { agentBuildQueue } from "./config/queue";
+
+app.get("/api/status/:jobId", async (req, res) => {
+    const { jobId } = req.params;
+    const job = await agentBuildQueue.getJob(jobId);
+
+    if (!job) return res.status(404).json({ error: "Job not found" });
+
+    const state = await job.getState();
+    const result = job.returnvalue || null;
+
+    return res.json({ jobId, state, result });
+});
 
 const PORT = process.env.PORT || 3000;
 
