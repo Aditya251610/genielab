@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import { generateCodePrompt } from "../services/promptGenerator.service";
-import { generateAgentCode } from "../services/codeGenerator.service"; // <-- new service
+import { generateAgentCode } from "../services/codeGenerator.service";
+import { uploadFile, getDownloadUrl } from "../services/s3.service"; // S3 service
 
 const REDIS_OPTIONS = {
   host: process.env.REDIS_HOST || "redis-17547.c321.us-east-1-2.ec2.redns.redis-cloud.com",
@@ -29,11 +30,21 @@ export const agentWorker = new Worker(
         chatHistory,
       });
 
-      console.log(`✅ Job ${job.id} completed. Code written to zip: ${zipPath}`);
-      console.log("Docker commands to run agent:", dockerCommands);
+      console.log(`✅ Job ${job.id} code generated: ${zipPath}`);
 
-      // 3️⃣ Return result for job completion
-      return { zipPath, dockerCommands };
+      // 3️⃣ Upload zip to S3
+      const s3Key = `agents/${job.id}.zip`;
+      await uploadFile(zipPath, s3Key);
+      const downloadUrl = await getDownloadUrl(s3Key);
+
+      console.log(`✅ Job ${job.id} uploaded to S3. Download URL: ${downloadUrl}`);
+
+      // 4️⃣ Return result including download URL
+      return {
+        zipPath,
+        dockerCommands,
+        downloadUrl,
+      };
     } catch (err) {
       console.error(`❌ Job ${job.id} failed:`, err);
       throw err; // mark the job as failed in BullMQ
