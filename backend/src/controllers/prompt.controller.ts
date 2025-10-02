@@ -1,54 +1,85 @@
 import { Request, Response } from 'express';
 import { processPrompt } from '../services/llm.service';
 import { generateManifest } from '../services/manifest.service';
-// Import your actual function from dbChats.service.ts
-import { getChatHistory } from '../services/dbChats.service'; 
+import { getChatHistory, saveChatMessage } from '../services/dbChats.service';
+import { ChatMessage } from '../types/chat';
 
 export const handlePrompt = async (req: Request, res: Response) => {
   try {
-    // In a real app, you would get the sessionId from an authenticated user session
-    const { prompt, sessionId = 'test-session' } = req.body;
+    const { prompt, sessionId = 'default-thread' } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
-    // Step 1: Always call the conversational service first
+    // Step 1: Save the new user prompt
+    const userMessage: ChatMessage = {
+      role: 'user',
+      parts: [{ text: prompt }],
+      timestamp: new Date().toISOString(),
+      sessionId,
+    };
+    await saveChatMessage(sessionId, userMessage);
+
+    // Step 2: Process the prompt
     const conversationalResult = await processPrompt(prompt, sessionId);
 
-    // Step 2: The controller now acts as an orchestrator based on the result
+    // Step 3: If more info is needed, return immediately
     if (conversationalResult.status === 'need_more_info') {
-      // The conversation is ongoing. Return the question to the user.
-      return res.status(200).json(conversationalResult);
-
-    } else if (conversationalResult.status === 'ready') {
-      // The conversation is complete! This is the trigger to generate the manifest.
-      console.log('Conversation is ready. Synthesizing manifest...');
-
-      // Step 3: Use your existing getChatHistory function
-      const finalChatHistoryArray = await getChatHistory(sessionId);
-
-      // Step 4: Transform the array of objects into a single string
-      const historyAsString = finalChatHistoryArray
-       .map(message => {
-          // This creates a line like "user: Hello there" or "model: How can I help?"
-          const content = message.parts.map(part => part.text).join('');
-          return `${message.role}: ${content}`;
-        })
-       .join('\n'); // Join all lines into a single transcript string
-
-      // Step 5: Call the manifest service with the formatted string
-      const manifest = await generateManifest(historyAsString);
-
-      // Return a new status and the completed manifest to the frontend
-      return res.status(200).json({
-        status: 'manifest_ready',
-        manifest: manifest,
-      });
-    } else {
-      // Handle any other cases, like errors from the llm.service
       return res.status(200).json(conversationalResult);
     }
+
+    // Step 4: If ready, fetch full chat history
+    if (conversationalResult.status === 'ready') {
+      const fullChatHistory: ChatMessage[] = await getChatHistory(sessionId);
+
+      // Step 5: Filter out previous model manifests (keep user messages and non-manifest model messages)
+      const filteredMessages = fullChatHistory.filter(msg => {
+        if (msg.role === 'user') return true;
+
+        if (msg.role === 'model') {
+          const text = msg.parts?.[0]?.text;
+          if (!text) return true;
+
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed?.name && parsed?.description) return false; // skip old manifests
+          } catch {
+            return true; // not JSON, keep message
+          }
+        }
+        return true;
+      });
+
+      // Step 6: Convert filtered messages to string for manifest generation
+      const historyAsString = filteredMessages
+        .map(msg => {
+          const content = msg.parts?.map(p => p.text || '').join('') || '';
+          return `${msg.role || 'unknown'}: ${content}`;
+        })
+        .join('\n');
+
+      // Step 7: Generate manifest based on latest prompt
+      const manifest = await generateManifest(historyAsString);
+
+      // Step 8: Save AI response as a new message
+      const modelMessage: ChatMessage = {
+        role: 'model',
+        parts: [{ text: JSON.stringify(manifest) }],
+        timestamp: new Date().toISOString(),
+        sessionId,
+      };
+      await saveChatMessage(sessionId, modelMessage);
+
+      // Step 9: Return manifest to frontend
+      return res.status(200).json({
+        status: 'manifest_ready',
+        manifest,
+      });
+    }
+
+    // Step 10: Fallback
+    return res.status(200).json(conversationalResult);
   } catch (error) {
     console.error('Error in handlePrompt controller:', error);
     return res.status(500).json({ error: 'Internal Server Error' });

@@ -17,7 +17,7 @@ ${JSON.stringify(manifest, null, 2)}
   `;
 
   const response = await genAI.models.generateContent({
-    model: "gemini-1.5-pro",
+    model: "gemini-2.5-pro",
     config: {
         systemInstruction: systemInstruction,
     },
